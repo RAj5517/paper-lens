@@ -2,14 +2,23 @@ import streamlit as st
 import os
 import shutil
 import tempfile
-import chromadb
-from sentence_transformers import SentenceTransformer
+# import chromadb
+# from sentence_transformers import SentenceTransformer
+# from src.config import (
+#     CHROMA_DB_DIR, EMBEDDING_MODEL, TOP_K_RESULTS,
+#     PDFS_DIR, CHUNK_SIZE, CHUNK_OVERLAP
+# )
 from src.config import (
-    CHROMA_DB_DIR, EMBEDDING_MODEL, TOP_K_RESULTS,
+    EMBEDDING_MODEL, TOP_K_RESULTS,
     PDFS_DIR, CHUNK_SIZE, CHUNK_OVERLAP
 )
 from src.pdf_processor import load_pdf, chunk_text
-from src.vector_store import search_similar_chunks, get_collection_count
+# from src.vector_store import search_similar_chunks, get_collection_count
+from src.vector_store import (
+    search_similar_chunks, get_collection_count,
+    get_indexed_papers, delete_paper,
+    reset_database, add_chunks_to_db
+)
 from src.gemini_handler import get_answer
 
 # ── Page config ──────────────────────────────────────────────────────────────
@@ -123,15 +132,11 @@ def get_embedder():
     return SentenceTransformer(EMBEDDING_MODEL)
 
 def ingest_pdf(filepath, filename):
-    """Process one PDF and add to ChromaDB"""
-    embedder = get_embedder()
-    client = chromadb.PersistentClient(path=CHROMA_DB_DIR)
-    collection = client.get_or_create_collection(name="medical_papers")
-
+    """Process one PDF and add to Pinecone"""
     # Check if already ingested
-    existing = collection.get(where={"source": filename})
-    if existing["ids"]:
-        return 0  # already exists
+    existing = get_indexed_papers()
+    if filename in existing:
+        return 0
 
     pages = load_pdf(filepath)
     chunks = chunk_text(pages)
@@ -139,50 +144,69 @@ def ingest_pdf(filepath, filename):
     if not chunks:
         return 0
 
-    texts = [c["text"] for c in chunks]
-    embeddings = embedder.encode(texts)
+    return add_chunks_to_db(chunks, filename)
 
-    # Use unique IDs based on filename
-    start_id = collection.count()
-    collection.add(
-        ids=[f"{filename}_chunk_{i+start_id}" for i in range(len(chunks))],
-        embeddings=embeddings.tolist(),
-        documents=texts,
-        metadatas=[{
-            "source": filename,
-            "page_number": c["page_number"]
-        } for c in chunks]
-    )
-    return len(chunks)
+# def ingest_pdf(filepath, filename):
+#     """Process one PDF and add to ChromaDB"""
+#     embedder = get_embedder()
+#     client = chromadb.PersistentClient(path=CHROMA_DB_DIR)
+#     collection = client.get_or_create_collection(name="medical_papers")
 
+#     # Check if already ingested
+#     existing = collection.get(where={"source": filename})
+#     if existing["ids"]:
+#         return 0  # already exists
 
-def get_indexed_papers():
-    """Get list of unique paper names in DB"""
-    try:
-        client = chromadb.PersistentClient(path=CHROMA_DB_DIR)
-        collection = client.get_or_create_collection(name="medical_papers")
-        results = collection.get()
-        if not results["metadatas"]:
-            return []
-        papers = list(set(m["source"] for m in results["metadatas"]))
-        return sorted(papers)
-    except:
-        return []
+#     pages = load_pdf(filepath)
+#     chunks = chunk_text(pages)
 
+#     if not chunks:
+#         return 0
 
-def delete_paper(filename):
-    """Remove a paper's chunks from ChromaDB"""
-    client = chromadb.PersistentClient(path=CHROMA_DB_DIR)
-    collection = client.get_or_create_collection(name="medical_papers")
-    results = collection.get(where={"source": filename})
-    if results["ids"]:
-        collection.delete(ids=results["ids"])
+#     texts = [c["text"] for c in chunks]
+#     embeddings = embedder.encode(texts)
+
+#     # Use unique IDs based on filename
+#     start_id = collection.count()
+#     collection.add(
+#         ids=[f"{filename}_chunk_{i+start_id}" for i in range(len(chunks))],
+#         embeddings=embeddings.tolist(),
+#         documents=texts,
+#         metadatas=[{
+#             "source": filename,
+#             "page_number": c["page_number"]
+#         } for c in chunks]
+#     )
+#     return len(chunks)
 
 
-def reset_database():
-    """Wipe entire ChromaDB"""
-    if os.path.exists(CHROMA_DB_DIR):
-        shutil.rmtree(CHROMA_DB_DIR)
+# def get_indexed_papers():
+#     """Get list of unique paper names in DB"""
+#     try:
+#         client = chromadb.PersistentClient(path=CHROMA_DB_DIR)
+#         collection = client.get_or_create_collection(name="medical_papers")
+#         results = collection.get()
+#         if not results["metadatas"]:
+#             return []
+#         papers = list(set(m["source"] for m in results["metadatas"]))
+#         return sorted(papers)
+#     except:
+#         return []
+
+
+# def delete_paper(filename):
+#     """Remove a paper's chunks from ChromaDB"""
+#     client = chromadb.PersistentClient(path=CHROMA_DB_DIR)
+#     collection = client.get_or_create_collection(name="medical_papers")
+#     results = collection.get(where={"source": filename})
+#     if results["ids"]:
+#         collection.delete(ids=results["ids"])
+
+
+# def reset_database():
+#     """Wipe entire ChromaDB"""
+#     if os.path.exists(CHROMA_DB_DIR):
+#         shutil.rmtree(CHROMA_DB_DIR)
 
 
 # ── HEADER ────────────────────────────────────────────────────────────────────
