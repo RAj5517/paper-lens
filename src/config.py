@@ -3,9 +3,10 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# Gemini API
+
 # GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
 
 # Paths
 PDFS_DIR = "pdfs"
@@ -22,4 +23,10 @@ TOP_K_RESULTS = 5       # how many chunks to retrieve
 EMBEDDING_MODEL = "all-MiniLM-L6-v2"
 
 # Gemini model
-GEMINI_MODEL = "gemini-2.0-flash"
+# GEMINI_MODEL = "gemini-2.0-flash"
+
+# Pinecone
+PINECONE_INDEX = "medical-papers"
+
+# Groq
+GROQ_MODEL = "llama-3.3-70b-versatile"
