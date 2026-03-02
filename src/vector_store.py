@@ -2,7 +2,6 @@ from pinecone import Pinecone
 from sentence_transformers import SentenceTransformer
 from src.config import PINECONE_API_KEY, PINECONE_INDEX, EMBEDDING_MODEL, TOP_K_RESULTS
 
-# Lazy load — only loads when first needed
 _embedder = None
 _index = None
 
@@ -21,14 +20,20 @@ def get_index():
         _index = pc.Index(PINECONE_INDEX)
     return _index
 
+def get_namespace(user_id: str) -> str:
+    """Convert user email/id to safe Pinecone namespace"""
+    return user_id.replace("@", "_at_").replace(".", "_").lower()[:50]
 
-def add_chunks_to_db(chunks, filename):
+def add_chunks_to_db(chunks, filename, user_id):
     if not chunks:
         return 0
     embedder = get_embedder()
     index = get_index()
+    namespace = get_namespace(user_id)
+
     texts = [c["text"] for c in chunks]
     embeddings = embedder.encode(texts, show_progress_bar=True)
+
     vectors = []
     for i, (chunk, embedding) in enumerate(zip(chunks, embeddings)):
         vectors.append({
@@ -40,20 +45,26 @@ def add_chunks_to_db(chunks, filename):
                 "page_number": chunk["page_number"]
             }
         })
+
     batch_size = 100
     for i in range(0, len(vectors), batch_size):
-        index.upsert(vectors=vectors[i:i + batch_size])
+        index.upsert(vectors=vectors[i:i + batch_size], namespace=namespace)
+
     return len(vectors)
 
-def search_similar_chunks(query, top_k=TOP_K_RESULTS):
+def search_similar_chunks(query, user_id, top_k=TOP_K_RESULTS):
     embedder = get_embedder()
     index = get_index()
+    namespace = get_namespace(user_id)
+
     query_embedding = embedder.encode([query])[0]
     results = index.query(
         vector=query_embedding.tolist(),
         top_k=top_k,
-        include_metadata=True
+        include_metadata=True,
+        namespace=namespace
     )
+
     chunks = []
     for match in results["matches"]:
         chunks.append({
@@ -64,25 +75,29 @@ def search_similar_chunks(query, top_k=TOP_K_RESULTS):
         })
     return chunks
 
-def delete_paper(filename):
+def delete_paper(filename, user_id):
     index = get_index()
-    results = index.list(prefix=f"{filename}_chunk_")
+    namespace = get_namespace(user_id)
+    results = index.list(prefix=f"{filename}_chunk_", namespace=namespace)
     ids = list(results)
     if ids:
-        index.delete(ids=ids)
+        index.delete(ids=ids, namespace=namespace)
 
-
-def get_indexed_papers():
+def get_indexed_papers(user_id):
     try:
         index = get_index()
+        namespace = get_namespace(user_id)
         stats = index.describe_index_stats()
-        if stats["total_vector_count"] == 0:
+
+        if namespace not in stats.get("namespaces", {}):
             return []
+
         dummy = [0.0] * 384
         results = index.query(
             vector=dummy,
             top_k=10000,
-            include_metadata=True
+            include_metadata=True,
+            namespace=namespace
         )
         papers = list(set(
             m["metadata"]["source"]
@@ -93,84 +108,16 @@ def get_indexed_papers():
     except:
         return []
 
-def get_collection_count():
+def get_collection_count(user_id):
     try:
         index = get_index()
+        namespace = get_namespace(user_id)
         stats = index.describe_index_stats()
-        return stats["total_vector_count"]
+        return stats.get("namespaces", {}).get(namespace, {}).get("vector_count", 0)
     except:
         return 0
 
-def reset_database():
+def reset_database(user_id):
     index = get_index()
-    index.delete(delete_all=True)
-
-
-
-
-# this is for local use cromadb 
-
-# import chromadb
-# from sentence_transformers import SentenceTransformer
-# from src.config import CHROMA_DB_DIR, EMBEDDING_MODEL, TOP_K_RESULTS
-
-# # Load embedding model once (downloads first time ~80MB)
-# print("Loading embedding model...")
-# embedder = SentenceTransformer(EMBEDDING_MODEL)
-# print("Embedding model ready!")
-
-# # Setup ChromaDB
-# client = chromadb.PersistentClient(path=CHROMA_DB_DIR)
-# collection = client.get_or_create_collection(name="medical_papers")
-
-# def add_chunks_to_db(chunks):
-#     """Embed all chunks and store in ChromaDB"""
-#     if not chunks:
-#         print("No chunks to add!")
-#         return
-
-#     print(f"Embedding {len(chunks)} chunks... (this takes a few minutes)")
-
-#     texts = [chunk["text"] for chunk in chunks]
-#     embeddings = embedder.encode(texts, show_progress_bar=True)
-
-#     # Add to ChromaDB
-#     collection.add(
-#         ids=[f"chunk_{i}" for i in range(len(chunks))],
-#         embeddings=embeddings.tolist(),
-#         documents=texts,
-#         metadatas=[{
-#             "source": chunk["source"],
-#             "page_number": chunk["page_number"]
-#         } for chunk in chunks]
-#     )
-
-#     print(f"✅ {len(chunks)} chunks stored in ChromaDB!")
-
-# def search_similar_chunks(query, top_k=TOP_K_RESULTS):
-#     """Find most relevant chunks for a query"""
-
-#     # Embed the query
-#     query_embedding = embedder.encode([query])[0]
-
-#     # Search ChromaDB
-#     results = collection.query(
-#         query_embeddings=[query_embedding.tolist()],
-#         n_results=top_k
-#     )
-
-#     # Format results
-#     chunks = []
-#     for i in range(len(results["documents"][0])):
-#         chunks.append({
-#             "text": results["documents"][0][i],
-#             "source": results["metadatas"][0][i]["source"],
-#             "page_number": results["metadatas"][0][i]["page_number"],
-#             "similarity": 1 - results["distances"][0][i]
-#         })
-
-#     return chunks
-
-# def get_collection_count():
-#     """How many chunks are stored"""
-#     return collection.count()
+    namespace = get_namespace(user_id)
+    index.delete(delete_all=True, namespace=namespace)
