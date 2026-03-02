@@ -2,24 +2,33 @@ from pinecone import Pinecone
 from sentence_transformers import SentenceTransformer
 from src.config import PINECONE_API_KEY, PINECONE_INDEX, EMBEDDING_MODEL, TOP_K_RESULTS
 
-# Load embedding model once
-print("Loading embedding model...")
-embedder = SentenceTransformer(EMBEDDING_MODEL)
-print("Embedding model ready!")
+# Lazy load — only loads when first needed
+_embedder = None
+_index = None
 
-# Pinecone client
-pc = Pinecone(api_key=PINECONE_API_KEY)
-index = pc.Index(PINECONE_INDEX)
+def get_embedder():
+    global _embedder
+    if _embedder is None:
+        print("Loading embedding model...")
+        _embedder = SentenceTransformer(EMBEDDING_MODEL)
+        print("Embedding model ready!")
+    return _embedder
+
+def get_index():
+    global _index
+    if _index is None:
+        pc = Pinecone(api_key=PINECONE_API_KEY)
+        _index = pc.Index(PINECONE_INDEX)
+    return _index
+
 
 def add_chunks_to_db(chunks, filename):
-    """Embed chunks and upsert to Pinecone"""
     if not chunks:
         return 0
-
+    embedder = get_embedder()
+    index = get_index()
     texts = [c["text"] for c in chunks]
     embeddings = embedder.encode(texts, show_progress_bar=True)
-
-    # Build vectors for Pinecone
     vectors = []
     for i, (chunk, embedding) in enumerate(zip(chunks, embeddings)):
         vectors.append({
@@ -31,25 +40,20 @@ def add_chunks_to_db(chunks, filename):
                 "page_number": chunk["page_number"]
             }
         })
-
-    # Upsert in batches of 100
     batch_size = 100
     for i in range(0, len(vectors), batch_size):
-        batch = vectors[i:i + batch_size]
-        index.upsert(vectors=batch)
-
+        index.upsert(vectors=vectors[i:i + batch_size])
     return len(vectors)
 
 def search_similar_chunks(query, top_k=TOP_K_RESULTS):
-    """Find most relevant chunks for a query"""
+    embedder = get_embedder()
+    index = get_index()
     query_embedding = embedder.encode([query])[0]
-
     results = index.query(
         vector=query_embedding.tolist(),
         top_k=top_k,
         include_metadata=True
     )
-
     chunks = []
     for match in results["matches"]:
         chunks.append({
@@ -58,25 +62,22 @@ def search_similar_chunks(query, top_k=TOP_K_RESULTS):
             "page_number": match["metadata"]["page_number"],
             "similarity": match["score"]
         })
-
     return chunks
 
 def delete_paper(filename):
-    """Delete all chunks for a paper"""
-    # Fetch IDs matching filename prefix
+    index = get_index()
     results = index.list(prefix=f"{filename}_chunk_")
     ids = list(results)
     if ids:
         index.delete(ids=ids)
 
+
 def get_indexed_papers():
-    """Get list of unique paper names"""
     try:
+        index = get_index()
         stats = index.describe_index_stats()
         if stats["total_vector_count"] == 0:
             return []
-
-        # Query with a dummy vector to get metadata
         dummy = [0.0] * 384
         results = index.query(
             vector=dummy,
@@ -93,15 +94,15 @@ def get_indexed_papers():
         return []
 
 def get_collection_count():
-    """Total vectors stored"""
     try:
+        index = get_index()
         stats = index.describe_index_stats()
         return stats["total_vector_count"]
     except:
         return 0
 
 def reset_database():
-    """Delete all vectors"""
+    index = get_index()
     index.delete(delete_all=True)
 
 
